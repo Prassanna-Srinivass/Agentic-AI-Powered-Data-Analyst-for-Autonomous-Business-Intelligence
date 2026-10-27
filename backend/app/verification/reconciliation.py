@@ -8,7 +8,12 @@ Approved tool: validate_reconciliation
 
 from __future__ import annotations
 
+import math
 from typing import Any
+
+# Segment values are rounded individually (4 decimals), so a tiny absolute slack is needed
+# for totals close to zero.
+ABSOLUTE_TOLERANCE = 0.01
 
 
 def validate_reconciliation(
@@ -26,8 +31,9 @@ def validate_reconciliation(
     segment_changes : dict[str, float]
         Mapping of segment name → change amount.
     tolerance : float
-        Acceptable absolute difference between the sum of segments
-        and the overall change (default 1%).
+        Acceptable difference between the sum of segments and the overall change, as a
+        fraction of ``abs(overall_change)`` (default 1%). A small absolute slack
+        (``ABSOLUTE_TOLERANCE``) is always allowed so rounding never fails a zero total.
 
     Returns
     -------
@@ -35,21 +41,25 @@ def validate_reconciliation(
         reconciled: bool — whether the values match within tolerance
         segment_sum: float — sum of all segment changes
         difference: float — absolute difference from overall change
+        allowed_difference: float — the largest difference that would still reconcile
         segments: dict — the input segment changes
     """
-    # TODO: Implement reconciliation logic (Day 4)
-    # - Sum segment_changes values
-    # - Compare with overall_change
-    # - Flag if difference exceeds tolerance
-    segment_sum = sum(segment_changes.values())
-    difference = abs(overall_change - segment_sum)
-    reconciled = difference <= abs(overall_change * tolerance)
+    if tolerance < 0:
+        raise ValueError("tolerance must not be negative.")
+    values = [float(v) for v in segment_changes.values()]
+    if not all(math.isfinite(v) for v in values) or not math.isfinite(float(overall_change)):
+        raise ValueError("Reconciliation inputs must be finite numbers.")
+
+    segment_sum = math.fsum(values)
+    difference = abs(float(overall_change) - segment_sum)
+    allowed = max(ABSOLUTE_TOLERANCE, abs(float(overall_change)) * tolerance)
 
     return {
-        "reconciled": reconciled,
+        "reconciled": bool(difference <= allowed),
         "overall_change": overall_change,
         "segment_sum": round(segment_sum, 4),
         "difference": round(difference, 4),
+        "allowed_difference": round(allowed, 4),
         "tolerance": tolerance,
         "segments": segment_changes,
     }

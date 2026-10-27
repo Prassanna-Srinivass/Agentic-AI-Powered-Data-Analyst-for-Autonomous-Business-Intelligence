@@ -46,7 +46,7 @@ TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
 _UPDATABLE_JOB_FIELDS = frozenset({
     "status", "answer", "limitations", "chart_specs", "verification",
-    "errors", "error", "completed_at",
+    "errors", "error", "completed_at", "assumptions", "intent",
 })
 
 
@@ -131,6 +131,8 @@ class Store:
             "answer": None,
             "chart_specs": [],
             "limitations": [],
+            "assumptions": [],
+            "intent": None,
             "verification": {},
             "errors": [],
             "error": None,
@@ -211,8 +213,12 @@ class Store:
         input_summary: str = "",
         output_summary: str = "",
         status: str = "running",
+        result: Any = None,
     ) -> dict[str, Any]:
-        """Append an analysis step and return it (``step_number`` starts at 1)."""
+        """Append an analysis step and return it (``step_number`` starts at 1).
+
+        ``result`` is the tool's full deterministic output, kept as evidence for the step.
+        """
         created: dict[str, Any] = {}
 
         def mutate(job: dict[str, Any]) -> None:
@@ -222,6 +228,7 @@ class Store:
                 "input_summary": input_summary,
                 "output_summary": output_summary,
                 "status": status,
+                "result": result,
             }
             job["steps"].append(to_jsonable(step, max_text_length=None))
             created.update(job["steps"][-1])
@@ -231,8 +238,8 @@ class Store:
         return created
 
     def update_step(self, job_id: str, step_number: int, **fields: Any) -> dict[str, Any] | None:
-        """Update ``status`` / ``input_summary`` / ``output_summary`` of an existing step."""
-        allowed = {"status", "input_summary", "output_summary"}
+        """Update ``status`` / ``input_summary`` / ``output_summary`` / ``result`` of a step."""
+        allowed = {"status", "input_summary", "output_summary", "result"}
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"Cannot update step fields: {', '.join(sorted(unknown))}")
@@ -303,3 +310,10 @@ def get_store() -> Store:
         if _store is None or _store.db_path != path:
             _store = Store(path)
         return _store
+
+
+def reset_store() -> None:
+    """Reset the global store (for testing only)."""
+    global _store
+    with _store_lock:
+        _store = None

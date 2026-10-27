@@ -35,6 +35,16 @@ class Finding:
 
 
 @dataclass
+class PlanStep:
+    """A single planned step with tool and parameters."""
+    tool: str
+    params: dict[str, Any]
+    rationale: str = ""
+    depends_on: list[int] = field(default_factory=list)
+    status: str = "pending"  # pending | running | completed | failed
+
+
+@dataclass
 class AnalysisState:
     """
     Shared state for the LangGraph analysis workflow.
@@ -55,23 +65,31 @@ class AnalysisState:
     quality_flags: list[str] = field(default_factory=list)
 
     # --- Plan (populated by plan node) ---
-    plan: list[dict[str, Any]] = field(default_factory=list)
+    intent: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    assumptions: list[str] = field(default_factory=list)
+    plan: list[PlanStep] = field(default_factory=list)
+    queue: list[PlanStep] = field(default_factory=list)
 
     # --- Execution tracking ---
     steps: list[AnalysisStep] = field(default_factory=list)
+    executed: list[dict[str, Any]] = field(default_factory=list)
     current_step: int = 0
     tool_calls_used: int = 0
     retries_used: int = 0
 
     # --- Results ---
+    results: list[dict[str, Any]] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     verification: dict[str, Any] = field(default_factory=dict)
-    chart_specs: list[dict[str, Any]] = field(default_factory=list)
+    charts: list[dict[str, Any]] = field(default_factory=list)
 
     # --- Final output ---
     answer: str = ""
     limitations: list[str] = field(default_factory=list)
     status: str = "pending"  # pending | profiling | planning | executing | verifying | completed | failed
+    budget_exhausted: bool = False
+    clarification: str = ""
 
     # --- Error tracking ---
     errors: list[str] = field(default_factory=list)

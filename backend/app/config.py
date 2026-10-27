@@ -14,7 +14,13 @@ MAX_QUESTION_CHARS      Maximum length of an analysis question     ``1000``
 MAX_JOB_SECONDS         Wall-clock limit for one analysis job      ``120``
 MAX_ACTIVE_JOBS         Jobs allowed to run at the same time       ``3``
 CORS_ORIGINS            Comma-separated allowed browser origins    local Vite dev servers
+LLM_PROVIDER            ``auto`` (use OpenAI if a key is set),     ``auto``
+                        ``openai``, or ``none`` (rules only)
+LLM_MODEL               Tool-calling model used for planning       ``gpt-4o``
+LLM_TIMEOUT_SECONDS     Per-request model timeout                  ``30``
 ======================  =========================================  ==============================
+
+The model API key is read from ``OPENAI_API_KEY`` (never stored in settings or logged).
 """
 
 from __future__ import annotations
@@ -47,6 +53,9 @@ class Settings:
     max_job_seconds: float
     max_active_jobs: int
     cors_origins: tuple[str, ...]
+    llm_provider: str
+    llm_model: str
+    llm_timeout_seconds: float
 
 
 def _int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -77,4 +86,7 @@ def get_settings() -> Settings:
         max_job_seconds=float(_int_env("MAX_JOB_SECONDS", 120)),
         max_active_jobs=_int_env("MAX_ACTIVE_JOBS", 3),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
+        llm_provider=(os.environ.get("LLM_PROVIDER") or "auto").strip().lower(),
+        llm_model=(os.environ.get("LLM_MODEL") or "gpt-4o").strip(),
+        llm_timeout_seconds=float(_int_env("LLM_TIMEOUT_SECONDS", 30)),
     )

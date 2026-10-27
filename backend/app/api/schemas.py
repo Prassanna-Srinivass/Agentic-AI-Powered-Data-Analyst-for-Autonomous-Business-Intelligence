@@ -57,6 +57,7 @@ class StepOut(BaseModel):
     input_summary: str = ""
     output_summary: str = ""
     status: str = "pending"
+    result: dict[str, Any] | None = None
 
 
 class FindingOut(BaseModel):
@@ -80,6 +81,8 @@ class AnalysisJobOut(BaseModel):
     answer: str | None = None
     chart_specs: list[dict[str, Any]] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    intent: str | None = None
     verification: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
 
@@ -104,5 +107,7 @@ class ReportOut(BaseModel):
     findings: list[FindingOut] = Field(default_factory=list)
     verification: dict[str, Any] = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    intent: str | None = None
     steps: list[StepOut] = Field(default_factory=list)
     chart_specs: list[dict[str, Any]] = Field(default_factory=list)
