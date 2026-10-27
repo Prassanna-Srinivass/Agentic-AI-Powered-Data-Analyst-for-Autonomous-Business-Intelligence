@@ -1,0 +1,46 @@
+# =============================================================================
+# Agentic AI-Powered Data Analyst — .gitignore
+# =============================================================================
+
+# --- Environment ---
+.env
+.env.local
+.env.*.local
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+*.egg
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/build/
+.vite/
+
+# --- Data ---
+data/uploads/
+data/*.db
+**/data/*.db
+**/data/*.db-wal
+**/data/*.db-shm
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Docker ---
+*.log
