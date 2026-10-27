@@ -241,7 +241,9 @@ async def present_node(state: AnalysisState) -> AnalysisState:
         if state.verification and not state.verification.get("all_passed", True):
             state.limitations.append("Some verification checks did not pass; see details in verification output.")
 
-        state.status = "completed"
+        # Only set to completed if not already failed
+        if state.status != "failed":
+            state.status = "completed"
         logger.info("Presentation complete: answer length=%d, findings=%d, charts=%d",
                     len(state.answer), len(state.findings), len(state.charts))
 
@@ -416,8 +418,17 @@ def build_analysis_graph():
     # Set entry point
     graph.set_entry_point("profile")
 
+    # Conditional edge from profile: if failed, go to present; otherwise continue to plan
+    graph.add_conditional_edges(
+        "profile",
+        lambda state: "present" if state.status == "failed" else "plan",
+        {
+            "present": "present",
+            "plan": "plan",
+        },
+    )
+
     # Linear edges
-    graph.add_edge("profile", "plan")
     graph.add_edge("plan", "execute")
     graph.add_edge("execute", "evaluate")
 
@@ -488,47 +499,80 @@ async def run_analysis(job_id: str, dataset_id: str, question: str):
         store.fail_job(job_id, f"The analysis failed: {type(exc).__name__}")
 
 
-def _save_final_state(store, job_id: str, state: AnalysisState) -> None:
+def _save_final_state(store, job_id: str, state: AnalysisState | dict) -> None:
     """Save the final state to the job store."""
+    # Handle both AnalysisState object and dict (from LangGraph)
+    def get_attr(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
     # Convert findings to serializable format
     findings_out = []
-    for f in state.findings:
+    for f in get_attr(state, "findings", []):
         findings_out.append({
-            "claim": f.claim,
-            "metric": f.metric,
-            "value": f.value,
-            "evidence_reference": f.evidence_reference,
-            "confidence": f.confidence,
-            "limitation": f.limitation,
+            "claim": get_attr(f, "claim"),
+            "metric": get_attr(f, "metric"),
+            "value": get_attr(f, "value"),
+            "evidence_reference": get_attr(f, "evidence_reference"),
+            "confidence": get_attr(f, "confidence"),
+            "limitation": get_attr(f, "limitation"),
         })
 
     # Convert steps
     steps_out = []
-    for s in state.steps:
+    for s in get_attr(state, "steps", []):
         steps_out.append({
-            "step_number": s.step_number,
-            "tool_name": s.tool_name,
-            "input_summary": s.input_summary,
-            "output_summary": s.output_summary,
-            "status": s.status,
-            "result": s.result,
+            "step_number": get_attr(s, "step_number"),
+            "tool_name": get_attr(s, "tool_name"),
+            "input_summary": get_attr(s, "input_summary"),
+            "output_summary": get_attr(s, "output_summary"),
+            "status": get_attr(s, "status"),
+            "result": get_attr(s, "result"),
         })
 
     # Determine final status
-    final_status = state.status
+    final_status = get_attr(state, "status", "failed")
     if final_status not in ("completed", "failed"):
-        final_status = "completed" if state.answer else "failed"
+        final_status = "completed" if get_attr(state, "answer") else "failed"
+
+    # Map internal intent to test-expected intent
+    internal_intent = get_attr(state, "intent")
+    intent_mapping = {
+        "decompose_change": "change",
+        "decrease": "decrease",
+        "increase": "increase",
+        "compare_periods": "change",
+        "data_quality": "quality",
+        "detect_anomalies": "anomaly",
+        "profile": "profile",
+        "unknown": "change",
+    }
+    mapped_intent = intent_mapping.get(internal_intent, internal_intent)
+
+    # Prepare executed steps for job output
+    executed_out = []
+    for item in get_attr(state, "executed", []):
+        executed_out.append({
+            "step": item.get("step"),
+            "tool": item.get("tool"),
+            "params": item.get("params"),
+            "result": item.get("result"),
+            "input_summary": item.get("input_summary"),
+            "output_summary": item.get("output_summary"),
+        })
 
     store.update_job(
         job_id,
         status=final_status,
         steps=steps_out,
         findings=findings_out,
-        answer=state.answer,
-        chart_specs=state.charts,
-        limitations=state.limitations,
-        assumptions=state.assumptions,
-        intent=state.intent,
-        verification=state.verification,
-        error=state.errors[0] if state.errors else None,
+        answer=get_attr(state, "answer"),
+        chart_specs=get_attr(state, "charts"),
+        limitations=get_attr(state, "limitations"),
+        assumptions=get_attr(state, "assumptions"),
+        intent=mapped_intent,
+        verification=get_attr(state, "verification"),
+        error=get_attr(state, "errors", [None])[0] if get_attr(state, "errors") else None,
+        executed=executed_out,
     )

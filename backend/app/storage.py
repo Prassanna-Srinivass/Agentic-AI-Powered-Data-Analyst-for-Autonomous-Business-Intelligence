@@ -47,6 +47,8 @@ TERMINAL_STATUSES = frozenset({"completed", "failed"})
 _UPDATABLE_JOB_FIELDS = frozenset({
     "status", "answer", "limitations", "chart_specs", "verification",
     "errors", "error", "completed_at", "assumptions", "intent",
+    "findings", "steps",
+    "executed", "job_id",
 })
 
 
@@ -107,6 +109,37 @@ class Store:
             )
         return record
 
+    def create_dataset(
+        self,
+        name: str,
+        file_path: str,
+        row_count: int,
+        column_count: int,
+        profile: dict | None = None,
+        size_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a dataset record with the given parameters (alias for add_dataset)."""
+        import uuid
+        from pathlib import Path
+        
+        if size_bytes is None and file_path:
+            try:
+                size_bytes = Path(file_path).stat().st_size
+            except Exception:
+                size_bytes = 0
+        
+        record = {
+            "id": str(uuid.uuid4()),
+            "filename": name,
+            "file_path": file_path,
+            "uploaded_at": utc_now(),
+            "size_bytes": size_bytes or 0,
+            "row_count": row_count,
+            "column_count": column_count,
+            "profile": profile or {},
+        }
+        return self.add_dataset(record)
+
     def get_dataset(self, dataset_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT data FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
@@ -118,7 +151,10 @@ class Store:
         return [json.loads(r[0]) for r in rows]
 
     # ---------------------------------------------------------------------- jobs
-    def create_job(self, dataset_id: str, question: str, job_id: str) -> dict[str, Any]:
+    def create_job(self, dataset_id: str, question: str, job_id: str | None = None) -> dict[str, Any]:
+        if job_id is None:
+            import uuid
+            job_id = str(uuid.uuid4())
         job = {
             "id": job_id,
             "dataset_id": dataset_id,
@@ -147,7 +183,11 @@ class Store:
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT data FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+        if row:
+            job = json.loads(row[0])
+            job["job_id"] = job.get("id", job_id)
+            return job
+        return None
 
     def count_active_jobs(self) -> int:
         placeholders = ",".join("?" for _ in TERMINAL_STATUSES)

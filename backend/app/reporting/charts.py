@@ -55,13 +55,20 @@ def create_chart(kind: str, result: dict[str, Any], evidence_reference: str) -> 
     except KeyError as exc:
         raise ValueError(f"Result is missing '{exc.args[0]}' required for a {kind} chart.") from exc
 
+    spec = {
+        "data": data,
+        "layout": {"title": {"text": title}, "margin": {"t": 50, "r": 20, "b": 60, "l": 70}, **layout},
+    }
     return {
         "id": f"{kind}-{evidence_reference.replace(' ', '-')}",
         "kind": kind,
+        "type": kind,
         "title": title,
         "data": data,
         "layout": {"title": {"text": title}, "margin": {"t": 50, "r": 20, "b": 60, "l": 70}, **layout},
+        "spec": spec,
         "evidence_reference": evidence_reference,
+        "evidence_ref": evidence_reference,
     }
 
 

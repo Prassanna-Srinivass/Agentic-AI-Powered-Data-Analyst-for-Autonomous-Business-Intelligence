@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles for the application */
+.analysis-step {
+  @apply transition-all duration-200;
+}
+
+.analysis-step.pending {
+  @apply opacity-50;
+}
+
+.analysis-step.running {
+  @apply bg-blue-50 border-blue-200;
+}
+
+.analysis-step.completed {
+  @apply bg-green-50 border-green-200;
+}
+
+.analysis-step.failed {
+  @apply bg-red-50 border-red-200;
+}
+
+.chart-container {
+  @apply w-full h-96;
+}
+
+.finding-card {
+  @apply border rounded-lg p-4 bg-white shadow-sm;
+}
+
+.finding-evidence {
+  @apply text-sm text-gray-500 mt-2;
+}
+
+.finding-limitation {
+  @apply text-sm text-amber-700 mt-2;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-400;
+}
+
+/* Focus styles */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
+}

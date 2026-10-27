@@ -19,6 +19,9 @@ logger = __import__("logging").getLogger(__name__)
 MAX_TOOL_CALLS = 5
 MAX_RETRIES = 2
 
+# Debug counter
+_evaluation_count = 0
+
 
 def _has_comparison_result(executed: list[dict[str, Any]]) -> bool:
     """Check if we have a compare_periods result."""
@@ -194,12 +197,12 @@ def decide_followups(state: AnalysisState) -> AnalysisState:
                         "aggregation": "sum",
                     },
                     f"Decompose {metric} change by {dim} to find contributors",
-                    depends_on=[len(executed) + 1],
+                    depends_on=[state.current_step],
                 ))
                 break  # Only add one decomposition at a time
 
-    # Priority 2: If we have one decomposition, try secondary dimension
-    elif has_decomposition and not has_quality:
+    # Priority 2: If we have decomposition but no quality check, try secondary dimension
+    if not followups and has_decomposition and not has_quality:
         available_dims = [d for d in candidate_dimensions if d not in used_dimensions]
         if available_dims:
             # Use the next available dimension
@@ -215,29 +218,29 @@ def decide_followups(state: AnalysisState) -> AnalysisState:
                     "aggregation": "sum",
                 },
                 f"Decompose {metric} change by {next_dim} (secondary dimension)",
-                depends_on=[len(executed) + 1],
+                depends_on=[state.current_step],
             ))
 
-    # Priority 3: Check data quality if we haven't yet
-    elif not has_quality:
+    # Priority 3: Check data quality if we haven't yet (fall through if no follow-ups from priority 2)
+    if not followups and not has_quality:
         followups.append(_build_followup_step(
             "test_data_quality",
             {"date_column": date_column},
             "Validate data quality to ensure findings are reliable",
-            depends_on=[len(executed) + 1],
+            depends_on=[state.current_step],
         ))
 
     # Priority 4: Check for anomalies in the metric
-    elif not has_anomaly:
+    if not followups and not has_anomaly:
         followups.append(_build_followup_step(
             "detect_anomalies",
             {"metric": metric, "method": "iqr"},
             f"Check for anomalous values in {metric} that might explain the change",
-            depends_on=[len(executed) + 1],
+            depends_on=[state.current_step],
         ))
 
     # Priority 5: Look at companion metric if available
-    else:
+    if not followups:
         # Find another metric that might be related
         companion_metrics = [m for m in candidate_metrics if m != metric]
         if companion_metrics:
@@ -252,7 +255,7 @@ def decide_followups(state: AnalysisState) -> AnalysisState:
                     "aggregation": "sum",
                 },
                 f"Check companion metric {companion} for corroborating evidence",
-                depends_on=[len(executed) + 1],
+                depends_on=[state.current_step],
             ))
 
     # Add follow-ups to queue (only if we have budget)

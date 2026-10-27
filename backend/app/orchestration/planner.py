@@ -118,16 +118,22 @@ def _extract_periods(question: str) -> list[str]:
     """Extract period references from question (months, quarters, years)."""
     question_lower = question.lower()
     found = []
+    seen_months = set()
 
-    # Look for month names
+    # Look for month names - use word boundary matching to avoid partial matches (e.g., "dec" in "decrease")
     for word, month in _PERIOD_WORDS.items():
-        if word in question_lower:
-            # Check for year nearby
-            year_match = re.search(rf"{re.escape(word)}\s+(\d{{4}})", question_lower)
-            if year_match:
-                found.append(f"{word.capitalize()} {year_match.group(1)}")
-            else:
-                found.append(word.capitalize())
+        # Use regex with word boundaries to match whole words only
+        pattern = rf"\b{re.escape(word)}\b"
+        if re.search(pattern, question_lower):
+            # Only add if we haven't seen this month yet
+            if month not in seen_months:
+                seen_months.add(month)
+                # Check for year nearby
+                year_match = re.search(rf"{re.escape(word)}\s+(\d{{4}})", question_lower)
+                if year_match:
+                    found.append(f"{word.capitalize()} {year_match.group(1)}")
+                else:
+                    found.append(word.capitalize())
 
     # Look for "X vs Y" or "X compared to Y" patterns
     vs_patterns = [
@@ -164,9 +170,19 @@ def _classify_intent(question: str) -> str:
     if any(w in question_lower for w in _QUALITY_WORDS):
         return "data_quality"
 
-    # Check for decomposition
+    # Check for decomposition - 'why' questions often imply decomposition
+    # Check decomposition words first
     if any(w in question_lower for w in _DECOMPOSE_WORDS):
         return "decompose_change"
+    
+    # Check for 'why' questions about changes - distinguish decrease vs increase
+    if "why" in question_lower:
+        if any(w in question_lower for w in ["decrease", "fell", "dropped", "decline"]):
+            return "decrease"
+        if any(w in question_lower for w in ["increase", "rose", "grew", "growth"]):
+            return "increase"
+        if any(w in question_lower for w in ["change"]):
+            return "decompose_change"
 
     # Check for comparison
     if any(w in question_lower for w in _COMPARISON_WORDS):
@@ -202,7 +218,7 @@ def _build_rule_based_plan(
             rationale="Run data quality checks on the dataset",
         ))
 
-    elif intent in ("compare_periods", "decompose_change", "unknown") and metric and date_column:
+    elif intent in ("compare_periods", "decompose_change", "decrease", "increase", "unknown") and metric and date_column:
         # Default to comparing the two most recent periods if not specified
         if not period_a or not period_b:
             inferred_a, inferred_b = _infer_periods_from_profile(profile, date_column)
@@ -222,21 +238,8 @@ def _build_rule_based_plan(
                 rationale=f"Compare {metric} between {period_a} and {period_b}",
             ))
 
-            # If decompose intent, add a follow-up step
-            if intent == "decompose_change" and dimension:
-                plan.append(PlanStep(
-                    tool="group_metric_change",
-                    params={
-                        "metric": metric,
-                        "date_column": date_column,
-                        "group_column": dimension,
-                        "period_a": period_a,
-                        "period_b": period_b,
-                        "aggregation": "sum",
-                    },
-                    rationale=f"Break down {metric} change by {dimension}",
-                    depends_on=[1],
-                ))
+            # For decompose_change intent, the evaluator will add group_metric_change as a follow-up
+            # after the comparison step completes. We don't add it here to avoid duplication.
 
     return plan
 
@@ -411,6 +414,166 @@ def _convert_llm_plan(llm_output: dict[str, Any]) -> tuple[str, list[str], list[
     return intent, assumptions, plan_steps
 
 
+def _infer_previous_period(period: str, profile: dict[str, Any], date_column: str | None) -> str | None:
+    """Infer the previous period for a given period label.
+    
+    For monthly data, returns the previous month. For quarterly, previous quarter.
+    Falls back to the min date from profile if unable to determine.
+    """
+    logger = __import__('logging').getLogger(__name__)
+    logger.info(f"_infer_previous_period called with period={period}, date_column={date_column}")
+    
+    if not date_column or date_column not in profile.get("date_ranges", {}):
+        logger.info(f"No date_column or date_ranges: date_column={date_column}, date_ranges={profile.get('date_ranges', {})}")
+        return None
+    
+    date_range = profile["date_ranges"][date_column]
+    min_date_str = date_range.get("min", "")
+    max_date_str = date_range.get("max", "")
+    
+    logger.info(f"date_range: min={min_date_str}, max={max_date_str}")
+    
+    if not min_date_str or not max_date_str:
+        return None
+    
+    try:
+        import pandas as pd
+        # Parse the mentioned period
+        period_lower = period.strip().lower()
+        logger.info(f"period_lower={period_lower}")
+        
+        # Try to parse as month name
+        month_map = {
+            'january': 1, 'jan': 1,
+            'february': 2, 'feb': 2,
+            'march': 3, 'mar': 3,
+            'april': 4, 'apr': 4,
+            'may': 5,
+            'june': 6, 'jun': 6,
+            'july': 7, 'jul': 7,
+            'august': 8, 'aug': 8,
+            'september': 9, 'sep': 9, 'sept': 9,
+            'october': 10, 'oct': 10,
+            'november': 11, 'nov': 11,
+            'december': 12, 'dec': 12,
+        }
+        
+        # Check if period is a month name
+        for name, month in month_map.items():
+            if name in period_lower:
+                logger.info(f"Matched month name: {name} -> {month}")
+                # Extract year if present
+                year_match = __import__('re').search(r'(\d{4})', period)
+                year = int(year_match.group(1)) if year_match else None
+                
+                # If no year, try to infer from min/max dates
+                if year is None:
+                    min_date = pd.Timestamp(min_date_str)
+                    max_date = pd.Timestamp(max_date_str)
+                    # Assume the most recent year that has this month
+                    year = max_date.year
+                    if month > max_date.month:
+                        year = max_date.year - 1
+                    logger.info(f"Inferred year={year} from max_date={max_date}")
+                
+                # Calculate previous month
+                prev_month = month - 1
+                prev_year = year
+                if prev_month == 0:
+                    prev_month = 12
+                    prev_year -= 1
+                
+                # Format as month name
+                month_names = [
+                    'January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'
+                ]
+                result = month_names[prev_month - 1]
+                logger.info(f"Returning previous period: {result}")
+                return result
+        
+        # If period is a date string, try to parse it
+        try:
+            period_date = pd.Timestamp(period)
+            prev_date = period_date - pd.DateOffset(months=1)
+            # Return as month name
+            month_names = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ]
+            result = month_names[prev_date.month - 1]
+            logger.info(f"Parsed as date, returning: {result}")
+            return result
+        except Exception as e:
+            logger.info(f"Failed to parse as date: {e}")
+            pass
+        
+    except Exception as e:
+        logger.error(f"Exception in _infer_previous_period: {e}")
+        pass
+    
+    # Fallback: return min date as month name
+    try:
+        import pandas as pd
+        min_date = pd.Timestamp(min_date_str)
+        month_names = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ]
+        result = month_names[min_date.month - 1]
+        logger.info(f"Fallback to min date month: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Fallback failed: {e}")
+        pass
+    
+    return None
+
+
+def _generate_rule_based_assumptions(
+    intent: str,
+    metric: str | None,
+    date_column: str | None,
+    dimension: str | None,
+    period_a: str | None,
+    period_b: str | None,
+    profile: dict[str, Any],
+) -> list[str]:
+    """Generate assumptions for the rule-based plan."""
+    assumptions = []
+    
+    if metric:
+        assumptions.append(f"Analysis focuses on metric: {metric}")
+    
+    if date_column:
+        assumptions.append(f"Time dimension is based on column: {date_column}")
+    
+    if period_a and period_b:
+        assumptions.append(f"Comparison is between period {period_a} and period {period_b}")
+    elif period_a:
+        assumptions.append(f"Analysis period is {period_a}")
+    
+    if dimension:
+        assumptions.append(f"Decomposition is by dimension: {dimension}")
+    
+    if intent in ("decompose_change", "decrease", "increase"):
+        assumptions.append("Assumes the change can be meaningfully decomposed by the selected dimension")
+        assumptions.append("Assumes additive aggregation (sum) is appropriate for the metric")
+    
+    if intent == "compare_periods":
+        assumptions.append("Assumes the two periods are directly comparable")
+    
+    candidate_metrics = profile.get("candidate_metrics", [])
+    if metric and metric in candidate_metrics:
+        assumptions.append(f"Metric '{metric}' is a valid numeric column")
+    
+    candidate_dimensions = profile.get("candidate_dimensions", [])
+    if dimension and dimension in candidate_dimensions:
+        assumptions.append(f"Dimension '{dimension}' is a valid categorical column")
+    
+    return assumptions
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -441,6 +604,19 @@ async def create_plan(state: AnalysisState) -> AnalysisState:
 
     # Rule-based intent
     intent = _classify_intent(question)
+    logger = __import__('logging').getLogger(__name__)
+    logger.info(f"Rule-based intent: {intent}, periods: {periods}, period_a={period_a}, period_b={period_b}")
+
+    # For decompose_change, decrease, or increase intent with only one period mentioned, infer the previous period
+    # We need period_a = previous period, period_b = mentioned period for correct change direction
+    if intent in ("decompose_change", "decrease", "increase") and period_a and not period_b:
+        logger.info(f"Inferring previous period for {period_a}")
+        previous_period = _infer_previous_period(period_a, profile, date_column)
+        logger.info(f"Inferred previous period: {previous_period}")
+        if previous_period:
+            # Swap: period_a should be the earlier period (previous), period_b the later (mentioned)
+            period_b = period_a
+            period_a = previous_period
 
     # Try LLM planning
     llm_intent = None
@@ -458,10 +634,17 @@ async def create_plan(state: AnalysisState) -> AnalysisState:
 
     # Merge LLM and rule-based (prefer LLM if available)
     final_intent = llm_intent or intent
-    final_assumptions = llm_assumptions if llm_intent else []
-    final_plan = llm_plan if llm_intent else _build_rule_based_plan(
-        intent, metric, date_column, dimension, period_a, period_b, profile
-    )
+    if llm_intent:
+        final_assumptions = llm_assumptions
+        final_plan = llm_plan
+    else:
+        # Generate rule-based assumptions
+        final_assumptions = _generate_rule_based_assumptions(
+            intent, metric, date_column, dimension, period_a, period_b, profile
+        )
+        final_plan = _build_rule_based_plan(
+            intent, metric, date_column, dimension, period_a, period_b, profile
+        )
 
     # If still no plan, add a default profiling step
     if not final_plan and profile.get("row_count", 0) > 0:
@@ -496,9 +679,9 @@ def get_next_step(state: AnalysisState) -> PlanStep | None:
     for i, step in enumerate(state.queue):
         if step.status != "pending":
             continue
-        # Check dependencies
+        # Check dependencies against executed steps (depends_on contains step numbers)
         deps_satisfied = all(
-            state.queue[dep - 1].status == "completed" if dep <= len(state.queue) else False
+            any(e["step"] == dep and e.get("result") for e in state.executed)
             for dep in step.depends_on
         )
         if deps_satisfied:
